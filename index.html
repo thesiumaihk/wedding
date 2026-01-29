@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emily & Max - Wedding Immersive</title>
+    <link href="https://fonts.googleapis.com/css2?family=Pinyon+Script&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --gold: #f1c232;
+            --silver: #CFCFD4;
+            --wine: #2a0f18;
+            --bg-gradient: radial-gradient(circle, #2a0f18 0%, #000000 100%);
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg-gradient);
+            font-family: 'Pinyon Script', cursive, serif;
+            color: white;
+            user-select: none;
+        }
+
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        .overlay {
+            position: absolute;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .interactable {
+            pointer-events: auto;
+        }
+
+        #title-header {
+            top: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 56px;
+            color: var(--gold);
+            text-shadow: 0 0 15px rgba(241, 194, 50, 0.4);
+            letter-spacing: 3px;
+            text-align: center;
+            width: 100%;
+        }
+
+        #interaction-guide {
+            right: 30px;
+            bottom: 30px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px 20px;
+            border-radius: 15px;
+            border: 1px solid rgba(241, 194, 50, 0.3);
+            font-family: sans-serif;
+            font-size: 12px;
+            color: var(--silver);
+            backdrop-filter: blur(5px);
+        }
+
+        .guide-item {
+            margin: 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #control-bar {
+            bottom: 40px;
+            left: 40px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .btn {
+            background: rgba(42, 15, 24, 0.8);
+            border: 1px solid var(--gold);
+            color: var(--gold);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+
+        .btn:hover {
+            background: var(--gold);
+            color: black;
+            transform: translateY(-2px);
+        }
+
+        #upload-btn {
+            padding: 12px 30px;
+            border-radius: 30px;
+            font-family: sans-serif;
+            font-weight: bold;
+            font-size: 13px;
+            letter-spacing: 1px;
+        }
+
+        #loading-screen {
+            position: fixed;
+            inset: 0;
+            background: black;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 1.5s ease;
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 3px solid rgba(241, 194, 50, 0.1);
+            border-top: 3px solid var(--gold);
+            border-radius: 50%;
+            animation: spin 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+            margin-bottom: 25px;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        input[type="file"] { display: none; }
+    </style>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+
+    <div id="loading-screen">
+        <div class="spinner"></div>
+        <div style="color: var(--gold); font-size: 28px; letter-spacing: 2px;">Setting the Stage...</div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <div id="title-header" class="overlay">Emily & Max</div>
+
+    <div id="interaction-guide" class="overlay">
+        <div class="guide-item"><span>🖱️</span> Move mouse to swirl hearts</div>
+        <div class="guide-item"><span>👆</span> Click & hold to focus photos</div>
+        <div class="guide-item"><span>📸</span> Upload your own memories</div>
+    </div>
+
+    <div id="control-bar" class="overlay interactable">
+        <label for="file-input" id="upload-btn" class="btn">UPLOAD MEMORIES</label>
+        <input type="file" id="file-input" accept="image/*" multiple>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+
+        let scene, camera, renderer, composer, clock;
+        let heartParticles, floatingElements, photoMeshes = [];
+        let mouse = new THREE.Vector2(0, 0);
+        let targetMouse = new THREE.Vector2(0, 0);
+        let isMouseDown = false;
+
+        const PARAMS = {
+            particleCount: 6000,
+            bloomStrength: 1.2,
+            bloomRadius: 0.5,
+            bloomThreshold: 0.2
+        };
+
+        async function initScene() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 18;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            clock = new THREE.Clock();
+
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(
+                new THREE.Vector2(window.innerWidth, window.innerHeight),
+                PARAMS.bloomStrength,
+                PARAMS.bloomRadius,
+                PARAMS.bloomThreshold
+            );
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+
+            createHeartParticles();
+            createEnvironment();
+            setupInteractions();
+            animate();
+
+            setTimeout(() => {
+                const ls = document.getElementById('loading-screen');
+                if (ls) {
+                    ls.style.opacity = '0';
+                    setTimeout(() => ls.remove(), 1500);
+                }
+            }, 1000);
+        }
+
+        function getHeartPoint(t) {
+            const x = 16 * Math.pow(Math.sin(t), 3);
+            const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+            return new THREE.Vector3(x * 0.35, y * 0.35, (Math.random() - 0.5) * 2);
+        }
+
+        function createHeartParticles() {
+            const geo = new THREE.BufferGeometry();
+            const pos = [];
+            const colors = [];
+            const initialPos = [];
+            const sizes = [];
+
+            for (let i = 0; i < PARAMS.particleCount; i++) {
+                const t = Math.random() * Math.PI * 2;
+                const point = getHeartPoint(t);
+                
+                point.x += (Math.random() - 0.5) * 0.8;
+                point.y += (Math.random() - 0.5) * 0.8;
+
+                pos.push(point.x, point.y, point.z);
+                initialPos.push(point.x, point.y, point.z);
+                sizes.push(Math.random());
+
+                const color = new THREE.Color();
+                const r = Math.random();
+                if (r > 0.7) color.setHex(0xf1c232); // Gold
+                else if (r > 0.4) color.setHex(0xCFCFD4); // Silver
+                else color.setHex(0xC62828); // Wine Red
+                
+                colors.push(color.r, color.g, color.b);
+            }
+
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            geo.setAttribute('initialPosition', new THREE.Float32BufferAttribute(initialPos, 3));
+            geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geo.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+
+            const mat = new THREE.PointsMaterial({
+                size: 0.15,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending
+            });
+
+            heartParticles = new THREE.Points(geo, mat);
+            scene.add(heartParticles);
+        }
+
+        function createEnvironment() {
+            const count = 300;
+            const geo = new THREE.BufferGeometry();
+            const pos = [];
+            for(let i=0; i<count; i++) {
+                pos.push((Math.random()-0.5)*50, (Math.random()-0.5)*50, (Math.random()-0.5)*30);
+            }
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            const mat = new THREE.PointsMaterial({ size: 0.08, color: 0xffffff, transparent: true, opacity: 0.3 });
+            floatingElements = new THREE.Points(geo, mat);
+            scene.add(floatingElements);
+        }
+
+        function setupInteractions() {
+            window.addEventListener('mousemove', (e) => {
+                targetMouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+                targetMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            });
+
+            window.addEventListener('mousedown', () => isMouseDown = true);
+            window.addEventListener('mouseup', () => isMouseDown = false);
+
+            const fileInput = document.getElementById('file-input');
+            fileInput.addEventListener('change', (e) => {
+                Array.from(e.target.files).forEach(file => {
+                    const reader = new FileReader();
+                    reader.onload = (event) => addPhoto(event.target.result);
+                    reader.readAsDataURL(file);
+                });
+            });
+        }
+
+        function addPhoto(src) {
+            const texture = new THREE.TextureLoader().load(src);
+            // Ensure texture keeps its original color mapping
+            texture.colorSpace = THREE.SRGBColorSpace;
+            
+            const geo = new THREE.PlaneGeometry(4, 4);
+            
+            // Using MeshBasicMaterial to ignore scene lighting and show true photo colors
+            // Reduced opacity slightly to make them feel "integrated" rather than "pasted"
+            const mat = new THREE.MeshBasicMaterial({ 
+                map: texture, 
+                transparent: true, 
+                side: THREE.DoubleSide,
+                opacity: 0.85,
+                depthWrite: false
+            });
+            
+            const mesh = new THREE.Mesh(geo, mat);
+            
+            mesh.position.set((Math.random()-0.5)*30, (Math.random()-0.5)*20, (Math.random()-0.5)*10 - 10);
+            mesh.userData = {
+                velocity: new THREE.Vector3((Math.random()-0.5)*0.02, (Math.random()-0.5)*0.02, (Math.random()-0.5)*0.01),
+                rotationSpeed: (Math.random()-0.5)*0.01
+            };
+            
+            scene.add(mesh);
+            photoMeshes.push(mesh);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            mouse.x += (targetMouse.x - mouse.x) * 0.1;
+            mouse.y += (targetMouse.y - mouse.y) * 0.1;
+
+            const mouse3D = new THREE.Vector3(mouse.x * 15, mouse.y * 10, 0);
+
+            const positions = heartParticles.geometry.attributes.position.array;
+            const initialPos = heartParticles.geometry.attributes.initialPosition.array;
+
+            for (let i = 0; i < positions.length; i += 3) {
+                const ix = initialPos[i];
+                const iy = initialPos[i+1];
+                const iz = initialPos[i+2];
+
+                const dx = positions[i] - mouse3D.x;
+                const dy = positions[i+1] - mouse3D.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist < 6) {
+                    const force = (6 - dist) * 0.05;
+                    const angle = Math.atan2(dy, dx) + 0.1;
+                    positions[i] -= Math.cos(angle) * force;
+                    positions[i+1] -= Math.sin(angle) * force;
+                }
+
+                positions[i] += (ix - positions[i]) * 0.03;
+                positions[i+1] += (iy - positions[i+1]) * 0.03;
+                positions[i+2] += (iz - positions[i+2]) * 0.03;
+
+                const breath = 1 + Math.sin(time * 1.5 + i) * 0.005;
+                positions[i] *= breath;
+                positions[i+1] *= breath;
+            }
+            heartParticles.geometry.attributes.position.needsUpdate = true;
+
+            photoMeshes.forEach(mesh => {
+                if (isMouseDown) {
+                    mesh.position.lerp(new THREE.Vector3(0, 0, 8), 0.04);
+                    mesh.lookAt(camera.position);
+                    mesh.scale.lerp(new THREE.Vector3(1.5, 1.5, 1.5), 0.1);
+                    mesh.material.opacity = 1.0; // Fully clear when focused
+                } else {
+                    mesh.position.add(mesh.userData.velocity);
+                    mesh.rotation.y += mesh.userData.rotationSpeed;
+                    mesh.scale.lerp(new THREE.Vector3(1, 1, 1), 0.1);
+                    mesh.material.opacity = 0.85; // Subtle blend when floating
+                    
+                    if (Math.abs(mesh.position.x) > 20) mesh.userData.velocity.x *= -1;
+                    if (Math.abs(mesh.position.y) > 15) mesh.userData.velocity.y *= -1;
+                    if (Math.abs(mesh.position.z + 5) > 10) mesh.userData.velocity.z *= -1;
+                }
+            });
+
+            floatingElements.position.y -= 0.03;
+            if (floatingElements.position.y < -25) floatingElements.position.y = 25;
+
+            composer.render();
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        window.onload = initScene;
+
+    </script>
+</body>
+</html>
